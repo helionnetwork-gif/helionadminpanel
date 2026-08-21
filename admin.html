@@ -156,6 +156,35 @@
 
 </div>
 
+
+  <div class="step-card" style="border-color: rgba(124,92,252,0.4);">
+    <h2 class="display">Spot Market Maker</h2>
+    <div class="desc">Pitää BTC/USDT-orderbookin Binance-hinnan ympärillä (sisäinen matching). Käynnistä adminina.</div>
+    <div id="mmRunning" style="font-family:'JetBrains Mono',monospace; font-size:14px; margin-bottom:10px;">–</div>
+    <div style="font-size:12px; color:var(--muted);">Mid / Bid–Ask</div>
+    <div id="mmMid" style="font-family:'JetBrains Mono',monospace; margin-bottom:10px;">–</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
+      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:10px;">
+        <div style="font-size:10px; color:var(--muted);">MM USDT</div>
+        <div id="mmUsdt" style="font-family:'JetBrains Mono',monospace;">–</div>
+      </div>
+      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:10px;">
+        <div style="font-size:10px; color:var(--muted);">MM BTC</div>
+        <div id="mmBtc" style="font-family:'JetBrains Mono',monospace;">–</div>
+      </div>
+    </div>
+    <div class="input-row"><input type="number" id="mmSpread" value="0.15" step="0.05"><span class="unit">spread %</span></div>
+    <div class="input-row"><input type="number" id="mmLevels" value="5"><span class="unit">levels</span></div>
+    <div class="input-row"><input type="number" id="mmSize" value="0.02" step="0.01"><span class="unit">BTC / level</span></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+      <button class="btn-block" onclick="mmStart()">▶ MM Start</button>
+      <button class="btn-block" style="background:linear-gradient(180deg,#c44,#a33); color:#fff;" onclick="mmStop()">■ MM Stop</button>
+    </div>
+    <button class="btn-block" style="margin-top:8px; background:linear-gradient(180deg, var(--violet), #5b3fd6); color:#f4f1ff;" onclick="mmSave()">Tallenna + rebuild</button>
+    <button class="btn-block" style="margin-top:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--line);" onclick="refreshMm()">Päivitä MM</button>
+    <div class="status-line" id="mmLine"></div>
+  </div>
+
 <div id="toastHost"></div>
 
 <script>
@@ -310,7 +339,7 @@
 
   
   // ---------- Grid bot (admin JWT) ----------
-  const BACKEND_URL = "http://localhost:3001";
+  const BACKEND_URL = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')   ? 'http://localhost:3001'   : 'https://testnetworkserver.onrender.com';
 
   function adminAuthHeaders() {
     const token = localStorage.getItem('helion_token');
@@ -415,6 +444,69 @@
 
   setInterval(refreshGrid, 15000);
   refreshGrid();
+  
+  async function refreshMm() {
+    try {
+      const res = await fetch(BACKEND_URL + '/api/spot/mm/status', { headers: adminAuthHeaders() });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'mm status');
+      const el = document.getElementById('mmRunning');
+      el.textContent = d.running ? '● MM KÄYNNISSÄ' : '○ MM PYSAYTETTY';
+      el.style.color = d.running ? 'var(--success)' : 'var(--muted)';
+      document.getElementById('mmMid').textContent =
+        (d.lastMid != null ? Number(d.lastMid).toFixed(2) : '–') +
+        ' | book ' + (d.bookTop?.bestBid ?? '–') + ' / ' + (d.bookTop?.bestAsk ?? '–') +
+        ' | orders ' + (d.openOrderCount ?? 0);
+      document.getElementById('mmUsdt').textContent = d.balances ? Number(d.balances.USDT).toFixed(0) : '–';
+      document.getElementById('mmBtc').textContent = d.balances ? Number(d.balances.BTC).toFixed(4) : '–';
+      if (d.config) {
+        document.getElementById('mmSpread').value = d.config.spreadPct;
+        document.getElementById('mmLevels').value = d.config.levels;
+        document.getElementById('mmSize').value = d.config.orderSizeBtc;
+      }
+      document.getElementById('mmLine').textContent = d.lastError ? ('Virhe: ' + d.lastError) : (d.lastTickAt ? 'Tick ' + new Date(d.lastTickAt).toLocaleTimeString('fi-FI') : '');
+      document.getElementById('mmLine').className = d.lastError ? 'status-line error' : 'status-line';
+    } catch (e) {
+      document.getElementById('mmLine').textContent = e.message;
+      document.getElementById('mmLine').className = 'status-line error';
+    }
+  }
+  async function mmStart() {
+    try {
+      const res = await fetch(BACKEND_URL + '/api/spot/mm/start', { method:'POST', headers: adminAuthHeaders(), body:'{}' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'start');
+      toast('Spot MM käynnissä', 'success');
+      refreshMm();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  async function mmStop() {
+    try {
+      const res = await fetch(BACKEND_URL + '/api/spot/mm/stop', { method:'POST', headers: adminAuthHeaders(), body:'{}' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'stop');
+      toast('Spot MM stop', 'success');
+      refreshMm();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  async function mmSave() {
+    try {
+      const body = {
+        spreadPct: Number(document.getElementById('mmSpread').value),
+        levels: Number(document.getElementById('mmLevels').value),
+        orderSizeBtc: Number(document.getElementById('mmSize').value),
+        rebuild: true
+      };
+      const res = await fetch(BACKEND_URL + '/api/spot/mm/config', { method:'POST', headers: adminAuthHeaders(), body: JSON.stringify(body) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'config');
+      toast('MM config OK', 'success');
+      refreshMm();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  setInterval(refreshMm, 10000);
+  refreshMm();
+
 
   refreshPool();
 
